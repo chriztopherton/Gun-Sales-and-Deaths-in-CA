@@ -1,0 +1,196 @@
+---
+title: "Sta137 Final Project F19"
+output: html_document
+author: "Christopher Ton"
+date: "12/6/2019"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+library(astsa)
+library(tseries)
+library(zoo)
+require(graphics)
+library(forecast)
+```
+
+
+## Monthly Handgun Sales and Firearms Related Deaths in California (1980-1998) 
+
+# Introduction:
+
+The data consists of monthly handgun sales and firearms related deaths in California from 1980 to 1998. It is formatted as a time series due to the fact that each data point is a monthly observation, indexed at equally spaced points in time intervals in chronological order. An analysis of past and present occurences provides insight for features and characteristics of the observations that may provide useful information for the future. If we can model a series as a function of time, there is a greater understanding of any trends, periodic patterns or seasonalities existing in some nature of the topic of interest. Ideally, one would be interested in the dependencies among the observations and being able to determine whether, for instance, if gun sales leads deaths over the course of nearly two decades.
+```{r,echo=FALSE}
+data <- read.csv("/Users/christopherton/Documents/sta137/GD.dat.txt",sep="",header=FALSE)
+sales <- as.zoo(ts(data[,1],start = c(1980,1),end=c(1998,12),frequency = 12))
+deaths <- as.zoo(ts(data[,2],start = c(1980,1),end=c(1998,12),frequency = 12))
+
+#sales <- as.zoo(sales)
+sales <- as.ts(as.zoo(sales[1:length(sales)-1]))
+
+#deaths <- as.zoo(deaths)
+deaths<- as.ts(as.zoo(deaths[1:length(deaths)-1]))
+```
+
+## INSPECT FOR ANOMALIES (page 138)
+- possibly transformating the data
+- identifying the dependence orders of the model
+- parameter estimation
+- diagnostics
+- model choice
+
+```{r,echo=FALSE}
+plot.acf.pacf <- function(s,d)
+{
+  par(mfrow=c(2,1))
+  tsplot(s,col=4,xlab = "Years",ylab="Gun Sales Per 100k",main="Monthly Handgun Sales")
+  abline(reg=lm(s~time(s)))
+  lines(ksmooth(time(s), s, "normal", bandwidth = 3), lwd=2, col=2)
+
+  tsplot(d,col=4,xlab = "Years",ylab="Firearm Deaths Per 100k",main="Monthly Firearm Related Deaths")
+  abline(reg=lm(d~time(d)))
+  lines(ksmooth(time(d), d, "normal", bandwidth = 3), lwd=2, col=2)
+
+  
+  par(mfrow=c(2,2))
+  acf(s,lag.max = 120)
+  pacf(s,lag.max = 120)
+  acf(d,lag.max = 120)
+  pacf(d,lag.max = 120)
+  
+  qqnorm(s, pch = 1, frame = FALSE)
+  qqline(s, col = "steelblue", lwd = 2)
+  
+  qqnorm(d, pch = 1, frame = FALSE)
+  qqline(d, col = "steelblue", lwd = 2)
+}
+plot.acf.pacf(sales,deaths)
+
+test_stationarity <- function(dat)
+{
+  adf.test(dat)
+}
+test_stationarity(sales)
+test_stationarity(deaths)
+
+```
+ACF & PACF behavior on page 101.
+  - used to determine input parameters for the SARIMA model
+
+Observations:
+  Obvious trend in data
+  ACF ordinates are large and decay slowly
+  Large peak in PACF at lag 1 for sales and deaths
+  times series is not stationary
+  
+
+
+run regression, inspect residuals, cant be correlated, once known correlated fit sarima model in terms of AR, white noise means not correalted, inspect residual plot
+  
+```{r,echo=FALSE}
+sales_diff <- diff(sales)
+deaths_diff <- diff(deaths)
+
+plot.acf.pacf(sales_diff,deaths_diff)
+test_stationarity(sales_diff)
+test_stationarity(deaths_diff)
+
+#both are now stationary
+```
+
+Test the null hypothesis that the log of the Sales series has a unit root, versus the alternate hypothesis that the process is stationary. Repeat for Deaths. 
+  -   Want a p-value of less than 0.05 (or smaller)(refer to page 250)
+  
+A monthly series with no trend has seasonality if the expected values in different months of the year are different, but the expected value for the same month in different years is the same.
+
+Measure dependence between values of the series or the autocorrelations. Difficult to measure if the dependence structure is not regular or is changing at every time point. It needs to be determined that the time series is constant in mean and variance are constant and not dependent on time.
+
+Violations of stationarity: 
+  - mean increases over time
+  - increase in magnitude of the fluctuations around the trend leads to changes in the covariance function, the variance of the     process
+
+Advantage of differencing over detrending to remove trend is that no parameteres are estimated in differencing
+  - differencing does not yield an estimate of the stationary process y_t
+  - if an estimate of y_t is crucial, then detrending is more useful
+  - if the goal is to coerce the data to stationarity, then differencing is more appropriate
+
+the first difference removes the linear trend, the second diffrence removes the quadratic trend
+
+Transformations may be useful to equalize the variability over the length of the time series
+
+HOWEVER SEASONALITY STILL EXISTS!!! To remedy, use "diff(diff(data,12))"
+
+```{r,echo=FALSE}
+sales_diff.lag12 <- diff(diff(sales,12))
+deaths_diff.lag12 <- diff(diff(deaths,12))
+plot.acf.pacf(sales_diff.lag12,deaths_diff.lag12)
+```
+
+No apparent trend or seasonal component is present in either of sales and deaths plots. A second order difference of lag 12 suggests that both the ACF and PACF models tail off. Peaks do occur at every 12th interval which confirms the time difference of 12.
+
+## Cross Correlation Function
+```{r,echo=FALSE}
+(ccf <- ccf(x=deaths_diff.lag12,y=sales_diff.lag12)) # the assumptions of ccf is jointly stationarity of both series
+```
+Consider only the events happening during negative values of h since we are interested to see if gun sales leads deaths, meaning to identify if gun sales are useful predictors for deaths. Thus, the correlation between prior gun sales and present deaths are analyzed for forecasting.
+
+
+```{r,echo=FALSE}
+auto.arima(sales,D=1,trace=TRUE)  #Best model: ARIMA(1,0,0)(1,1,0)[12] with drift
+auto.arima(deaths,D=1,trace=TRUE) #Best model: ARIMA(2,1,2)(2,1,0)[12]
+
+```
+
+```{r,echo=FALSE}
+#m1=sarima(sales, p=12,d=1,q=1, P=0,D=1,Q=2,S=12) #peaks appear to occur at every 11th point
+#m2=sarima(sales, p=9,d=1,q=2, P=1,D=1,Q=0,S=12) #peaks appear to occur at every 11th point
+m3=sarima(sales, p=11,d=1,q=0, P=1,D=1,Q=2,S=12) #peaks appear to occur at every 11th point
+m3
+#c(m1$AIC,m1$AICc,m1$BIC)
+#c(m2$AIC,m2$AICc,m2$BIC)
+#c(m3$AIC,m3$AICc,m3$BIC)
+```
+
+
+```{r,echo=FALSE}
+#m1 = sarima(deaths,p=1,d=1,q=1, P=1,D=1,Q=2,S=12) 
+#m2 = sarima(deaths,p=2,d=1,q=2, P=1,D=1,Q=2,S=12)
+m3 = sarima(deaths,p=1,d=0,q=1, P=0,D=1,Q=1,S=12) #
+m3
+#c(m1$AIC,m1$AICc,m1$BIC)
+#c(m2$AIC,m2$AICc,m2$BIC)
+#c(m3$AIC,m3$AICc,m3$BIC)
+
+```
+
+## Regression With Autocorrelated Errors to construct a linear model relating the firearm deaths to the handgun sales
+
+```{r,echo=FALSE}
+trend = time(deaths)
+fit = lm(deaths~trend+sales, na.action=NULL)
+
+acf2(resid(fit), 52) # implies AR2
+checkresiduals(fit)
+```
+
+```{r}
+
+fit2 = sarima(deaths, 1,0,1,0,1,1,12, xreg=cbind(trend, sales))
+acf2(resid(fit2$fit))
+checkresiduals(fit2$fit)
+
+```
+
+
+```{r}
+
+sarima.for(deaths, 60, 1,0,1,0,1,1,12)
+```
+
+```{r, ref.label=knitr::all_labels(),echo=TRUE,eval=FALSE}
+```
+
+
